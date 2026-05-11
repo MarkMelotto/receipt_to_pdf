@@ -143,31 +143,36 @@ function parseOcr(text, knownDate) {
     }
   }
 
-  // Amount — prefer lines with total/sum keywords
+  // Amount — try keyword tiers from most to least specific, always take the LAST match
+  // (grand total appears below subtotals on every receipt layout)
   let amount = '';
-  const totalRe = /total|gesamt|betrag|summe|zahlung|to\s*pay|amount|grand|due|endbetrag/i;
-  for (const line of lines) {
-    if (totalRe.test(line)) {
-      const sym = (line.match(/[€$£]/) || [''])[0];
-      const m = line.match(/\d{1,6}[.,]\d{2}/g);
-      if (m) {
-        const biggest = m.reduce((a, b) =>
-          parseFloat(b.replace(',','.')) > parseFloat(a.replace(',','.')) ? b : a
-        );
-        amount = (sym || '') + biggest;
-        break;
-      }
-    }
+  const amountTiers = [
+    /zu zahlen|endbetrag|total betrag|grand total|to pay|amount due|total due|zu bezahlen/i,
+    /gesamt|summe|total/i,
+    /betrag|zahlung|amount/i,
+  ];
+  const numRe = /\d{1,6}[.,]\d{2}/g;
+
+  for (const re of amountTiers) {
+    const matched = lines.filter(l => re.test(l) && numRe.test(l));
+    numRe.lastIndex = 0;
+    if (matched.length === 0) continue;
+    // Use the last matching line — that's the grand total, not a subtotal
+    const line = matched[matched.length - 1];
+    const sym = (line.match(/[€$£]/) || [''])[0];
+    const nums = [...line.matchAll(/\d{1,6}[.,]\d{2}/g)].map(m => m[0]);
+    const biggest = nums.reduce((a, b) =>
+      parseFloat(b.replace(',', '.')) > parseFloat(a.replace(',', '.')) ? b : a
+    );
+    amount = (sym || '') + biggest;
+    break;
   }
-  // Fallback: largest value in last 8 lines
+  // Fallback: scan from the bottom up and take the first amount found
   if (!amount) {
-    let best = 0;
-    for (const line of lines.slice(-8)) {
+    for (const line of [...lines].reverse()) {
       const sym = (line.match(/[€$£]/) || [''])[0];
-      for (const m of line.matchAll(/\d{1,6}[.,]\d{2}/g)) {
-        const val = parseFloat(m[0].replace(',', '.'));
-        if (val > best) { best = val; amount = (sym || '') + m[0]; }
-      }
+      const m = line.match(/\d{1,6}[.,]\d{2}/);
+      if (m) { amount = (sym || '') + m[0]; break; }
     }
   }
 
