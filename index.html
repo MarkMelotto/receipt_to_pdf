@@ -4,82 +4,95 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Receipt → PDF</title>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #f3f4f6; color: #111; min-height: 100vh; }
 
-    header { background: #1e1b4b; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; gap: 0.75rem; }
+    /* Model loading banner */
+    #model-banner {
+      background: #1e1b4b; color: #c7d2fe;
+      font-size: .82rem; text-align: center;
+      padding: .55rem 1rem;
+      display: flex; align-items: center; justify-content: center; gap: .75rem;
+    }
+    #model-banner.ready { background: #14532d; color: #bbf7d0; }
+    #model-banner.error { background: #7f1d1d; color: #fecaca; }
+    .progress-bar-wrap { width: 140px; height: 6px; background: rgba(255,255,255,.2); border-radius: 99px; overflow: hidden; }
+    .progress-bar-fill  { height: 100%; background: #818cf8; border-radius: 99px; transition: width .3s; }
+
+    header { background: #1e1b4b; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; gap: .75rem; }
     header h1 { font-size: 1.25rem; font-weight: 600; }
 
     main { max-width: 1100px; margin: 2rem auto; padding: 0 1.25rem; }
 
-    /* Drop zone */
     #dropzone {
-      border: 2px dashed #9ca3af;
-      border-radius: 14px;
-      padding: 3.5rem 2rem;
-      text-align: center;
-      background: #fff;
-      cursor: pointer;
-      transition: border-color .2s, background .2s;
-      user-select: none;
+      border: 2px dashed #9ca3af; border-radius: 14px;
+      padding: 3.5rem 2rem; text-align: center; background: #fff;
+      cursor: pointer; transition: border-color .2s, background .2s; user-select: none;
     }
     #dropzone.over { border-color: #4f46e5; background: #eef2ff; }
     #dropzone .icon { font-size: 2.8rem; line-height: 1; margin-bottom: .75rem; }
     #dropzone strong { font-size: 1.05rem; }
     #dropzone p { color: #6b7280; margin-top: .35rem; font-size: .9rem; }
 
-    /* Action bar */
     #actions { display: none; align-items: center; gap: .75rem; margin: 1.5rem 0; flex-wrap: wrap; }
     button {
-      padding: .55rem 1.2rem;
-      border: none; border-radius: 8px;
-      cursor: pointer; font-size: .9rem; font-weight: 500;
-      transition: opacity .15s;
+      padding: .55rem 1.2rem; border: none; border-radius: 8px;
+      cursor: pointer; font-size: .9rem; font-weight: 500; transition: opacity .15s;
     }
     button:disabled { opacity: .45; cursor: default; }
-    #btn-zip  { background: #4f46e5; color: #fff; }
+    #btn-zip   { background: #4f46e5; color: #fff; }
     #btn-clear { background: #e5e7eb; color: #333; }
     #global-status { font-size: .85rem; color: #6b7280; }
 
-    /* Cards */
     #cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }
 
     .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.07); overflow: hidden; display: flex; flex-direction: column; }
     .card-thumb { width: 100%; height: 180px; object-fit: cover; display: block; background: #f9fafb; }
-    .card-body { padding: 1rem; flex: 1; display: flex; flex-direction: column; gap: .55rem; }
-    .card-name { font-size: .8rem; font-weight: 600; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card-body  { padding: 1rem; flex: 1; display: flex; flex-direction: column; gap: .55rem; }
+    .card-name  { font-size: .8rem; font-weight: 600; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-    .ocr-badge {
+    .status-badge {
       display: inline-block; font-size: .72rem; font-weight: 600;
       padding: .15rem .55rem; border-radius: 99px; width: fit-content;
     }
-    .ocr-badge.scanning { background: #fef9c3; color: #854d0e; }
-    .ocr-badge.done     { background: #dcfce7; color: #166534; }
-    .ocr-badge.failed   { background: #fee2e2; color: #991b1b; }
+    .status-badge.scanning { background: #fef9c3; color: #854d0e; }
+    .status-badge.done     { background: #dcfce7; color: #166534; }
+    .status-badge.failed   { background: #fee2e2; color: #991b1b; }
+    .status-badge.waiting  { background: #e0e7ff; color: #3730a3; }
 
     .field label { display: block; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #9ca3af; margin-bottom: .2rem; }
     .field input {
       width: 100%; padding: .38rem .6rem;
-      border: 1px solid #e5e7eb; border-radius: 6px;
-      font-size: .88rem; color: #111;
+      border: 1px solid #e5e7eb; border-radius: 6px; font-size: .88rem; color: #111;
       transition: border-color .15s;
     }
     .field input:focus { outline: none; border-color: #4f46e5; }
+    /* Highlight amount field */
+    .field.amount-field input { border-color: #a5b4fc; background: #f5f3ff; font-weight: 600; }
+    .field.amount-field input:focus { border-color: #4f46e5; }
 
     .fn-preview { font-size: .7rem; color: #9ca3af; word-break: break-all; margin-top: .1rem; }
-
-    .btn-dl { width: 100%; margin-top: auto; background: #4f46e5; color: #fff; padding: .5rem; border-radius: 7px; border: none; cursor: pointer; font-size: .85rem; font-weight: 500; }
+    .btn-dl {
+      width: 100%; margin-top: auto; background: #4f46e5; color: #fff;
+      padding: .5rem; border-radius: 7px; border: none; cursor: pointer;
+      font-size: .85rem; font-weight: 500;
+    }
     .btn-dl:disabled { background: #d1d5db; color: #6b7280; cursor: default; }
   </style>
 </head>
 <body>
 
+<div id="model-banner">
+  <span id="banner-text">Loading receipt ML model (first time ~200 MB, cached after)…</span>
+  <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-fill" style="width:0%"></div></div>
+  <span id="banner-pct">0%</span>
+</div>
+
 <header>
-  <div class="icon" style="font-size:1.6rem">🧾</div>
+  <div style="font-size:1.6rem">🧾</div>
   <h1>Receipt → PDF</h1>
 </header>
 
@@ -100,16 +113,95 @@
   <div id="cards"></div>
 </main>
 
-<script>
+<script type="module">
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
+
+env.allowLocalModels = false;
+
+// ── Model loading ──────────────────────────────────────────────────────────
+
+const bannerEl   = document.getElementById('model-banner');
+const bannerText = document.getElementById('banner-text');
+const bannerPct  = document.getElementById('banner-pct');
+const fillEl     = document.getElementById('progress-fill');
+
+// Track per-file download progress
+const fileProgress = {};
+function onProgress(info) {
+  if (info.status === 'progress' && info.name) {
+    fileProgress[info.name] = { loaded: info.loaded ?? 0, total: info.total ?? 1 };
+    const totLoaded = Object.values(fileProgress).reduce((s, f) => s + f.loaded, 0);
+    const totTotal  = Object.values(fileProgress).reduce((s, f) => s + f.total,  0);
+    const pct = totTotal > 0 ? Math.round((totLoaded / totTotal) * 100) : 0;
+    fillEl.style.width = pct + '%';
+    bannerPct.textContent = pct + '%';
+  }
+  if (info.status === 'ready') {
+    bannerEl.className = 'ready';
+    bannerText.textContent = '✓ ML model ready';
+    bannerPct.textContent = '';
+    fillEl.style.width = '100%';
+    setTimeout(() => { bannerEl.style.display = 'none'; }, 2500);
+    // Process any receipts that were added while the model was loading
+    pendingReceipts.splice(0).forEach(r => runAnalysis(r));
+  }
+}
+
+let extractor = null;
+const pendingReceipts = [];
+
+const modelReady = pipeline(
+  'image-to-text',
+  'Xenova/donut-base-finetuned-cord-v2',
+  { progress_callback: onProgress }
+).then(pipe => {
+  extractor = pipe;
+  return pipe;
+}).catch(() => {
+  bannerEl.className = 'error';
+  bannerText.textContent = '⚠ Model failed to load — fill in amounts manually';
+  bannerPct.textContent = '';
+});
+
+// ── Parse donut/CORD output ────────────────────────────────────────────────
+// The model outputs a token string. CORD v2 uses <s_key>value</s_key> format.
+
+function parseDonut(text) {
+  // Amount: look for total_price tag (most reliable)
+  const amountPatterns = [
+    /<s_total_price>(.*?)<\/s_total_price>/,
+    /<s_cashprice>(.*?)<\/s_cashprice>/,
+    /<s_creditcardprice>(.*?)<\/s_creditcardprice>/,
+  ];
+  let amount = '';
+  for (const re of amountPatterns) {
+    const m = text.match(re);
+    if (m && m[1].trim()) { amount = m[1].trim(); break; }
+  }
+
+  // Description: merchant name or first menu item name
+  const nmMatch = text.match(/<s_nm>(.*?)<\/s_nm>/);
+  const description = nmMatch ? nmMatch[1].trim() : '';
+
+  // Also try JSON in case the model returns that format
+  if (!amount) {
+    try {
+      const data = JSON.parse(text);
+      amount = data?.total?.total_price ?? data?.total?.cashprice ?? '';
+    } catch {}
+  }
+
+  return { amount, description };
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function slugify(text) {
-  text = String(text).toLowerCase().trim()
+  return String(text).toLowerCase().trim()
     .replace(/[^\w\s-]/g, '')
     .replace(/[\s_]+/g, '-')
     .substring(0, 40)
-    .replace(/^-+|-+$/g, '');
-  return text || 'unknown';
+    .replace(/^-+|-+$/g, '') || 'unknown';
 }
 
 function buildFilename(date, desc, amount) {
@@ -127,71 +219,6 @@ function dateFromFilename(name) {
   return null;
 }
 
-// ── OCR parsing ────────────────────────────────────────────────────────────
-
-function parseOcr(text, knownDate) {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-
-  // Date
-  let date = knownDate || '';
-  if (!date) {
-    for (const line of lines) {
-      let m = line.match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
-      if (m) { date = `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`; break; }
-      m = line.match(/(\d{1,2})[.\-\/](\d{1,2})[.\-\/](\d{4})/);
-      if (m) { date = `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; break; }
-    }
-  }
-
-  // Amount — try keyword tiers from most to least specific, always take the LAST match
-  // (grand total appears below subtotals on every receipt layout)
-  let amount = '';
-  const amountTiers = [
-    /zu zahlen|endbetrag|total betrag|grand total|to pay|amount due|total due|zu bezahlen/i,
-    /gesamt|summe|total/i,
-    /betrag|zahlung|amount/i,
-  ];
-  const numRe = /\d{1,6}[.,]\d{2}/g;
-
-  for (const re of amountTiers) {
-    const matched = lines.filter(l => re.test(l) && numRe.test(l));
-    numRe.lastIndex = 0;
-    if (matched.length === 0) continue;
-    // Use the last matching line — that's the grand total, not a subtotal
-    const line = matched[matched.length - 1];
-    const sym = (line.match(/[€$£]/) || [''])[0];
-    const nums = [...line.matchAll(/\d{1,6}[.,]\d{2}/g)].map(m => m[0]);
-    const biggest = nums.reduce((a, b) =>
-      parseFloat(b.replace(',', '.')) > parseFloat(a.replace(',', '.')) ? b : a
-    );
-    amount = (sym || '') + biggest;
-    break;
-  }
-  // Fallback: scan from the bottom up and take the first amount found
-  if (!amount) {
-    for (const line of [...lines].reverse()) {
-      const sym = (line.match(/[€$£]/) || [''])[0];
-      const m = line.match(/\d{1,6}[.,]\d{2}/);
-      if (m) { amount = (sym || '') + m[0]; break; }
-    }
-  }
-
-  // Description — first readable line near the top, skip numbers / separators
-  let description = '';
-  for (const line of lines.slice(0, 15)) {
-    if (line.length >= 4 && line.length <= 60 && !/^\d/.test(line) && !/^[*\-=|_#]/.test(line)) {
-      description = line;
-      break;
-    }
-  }
-
-  return {
-    date: date || 'unknown',
-    description: description || 'unknown',
-    amount: amount || 'unknown',
-  };
-}
-
 // ── PDF builder ────────────────────────────────────────────────────────────
 
 async function makePdf(file) {
@@ -204,115 +231,7 @@ async function makePdf(file) {
   return pdfDoc.save();
 }
 
-// ── Tesseract worker (one shared, queued internally by the lib) ────────────
-
-let workerPromise = null;
-
-function getWorker() {
-  if (!workerPromise) {
-    workerPromise = Tesseract.createWorker('eng', 1, { logger: () => {} });
-  }
-  return workerPromise;
-}
-
-async function ocr(url) {
-  const w = await getWorker();
-  const { data: { text } } = await w.recognize(url);
-  return text;
-}
-
-// ── State & UI ─────────────────────────────────────────────────────────────
-
-const receipts = [];
-
-const dropzone   = document.getElementById('dropzone');
-const fileInput  = document.getElementById('file-input');
-const actionsEl  = document.getElementById('actions');
-const cardsEl    = document.getElementById('cards');
-const btnZip     = document.getElementById('btn-zip');
-const btnClear   = document.getElementById('btn-clear');
-const globalStatus = document.getElementById('global-status');
-
-function refreshStatus() {
-  const ready = receipts.filter(r => r.ready).length;
-  const total = receipts.length;
-  btnZip.disabled = ready === 0;
-  globalStatus.textContent = total ? `${ready} / ${total} ready` : '';
-}
-
-function createCard(receipt) {
-  const card = document.createElement('div');
-  card.className = 'card';
-  card.innerHTML = `
-    <img class="card-thumb" src="${receipt.url}" alt="">
-    <div class="card-body">
-      <div class="card-name">${receipt.file.name}</div>
-      <span class="ocr-badge scanning">Scanning…</span>
-      <div class="field"><label>Date</label><input class="f-date" value="${receipt.date}"></div>
-      <div class="field"><label>Description</label><input class="f-desc" value="${receipt.description}"></div>
-      <div class="field"><label>Amount</label><input class="f-amount" value="${receipt.amount}"></div>
-      <div class="fn-preview"></div>
-      <button class="btn-dl" disabled>Download PDF</button>
-    </div>`;
-
-  cardsEl.appendChild(card);
-
-  const fDate   = card.querySelector('.f-date');
-  const fDesc   = card.querySelector('.f-desc');
-  const fAmount = card.querySelector('.f-amount');
-  const preview = card.querySelector('.fn-preview');
-  const badge   = card.querySelector('.ocr-badge');
-  const btnDl   = card.querySelector('.btn-dl');
-
-  const refresh = () => {
-    preview.textContent = buildFilename(fDate.value, fDesc.value, fAmount.value);
-  };
-  refresh();
-  [fDate, fDesc, fAmount].forEach(el => el.addEventListener('input', refresh));
-
-  btnDl.addEventListener('click', async () => {
-    btnDl.disabled = true;
-    btnDl.textContent = 'Building…';
-    try {
-      const pdf = await makePdf(receipt.file);
-      download(pdf, buildFilename(fDate.value, fDesc.value, fAmount.value));
-    } finally {
-      btnDl.disabled = false;
-      btnDl.textContent = 'Download PDF';
-    }
-  });
-
-  receipt.card = card;
-  receipt.getFields = () => ({ date: fDate.value, desc: fDesc.value, amount: fAmount.value });
-  receipt.setBadge = (state, text) => { badge.className = `ocr-badge ${state}`; badge.textContent = text; };
-  receipt.setFields = (d, de, a) => { fDate.value = d; fDesc.value = de; fAmount.value = a; refresh(); };
-  receipt.enableDl = () => { btnDl.disabled = false; };
-}
-
-async function processFile(file) {
-  const url = URL.createObjectURL(file);
-  const knownDate = dateFromFilename(file.name);
-  const receipt = { file, url, date: knownDate || '', description: '', amount: '', ready: false };
-  receipts.push(receipt);
-
-  actionsEl.style.display = 'flex';
-  createCard(receipt);
-
-  try {
-    const text = await ocr(url);
-    const info = parseOcr(text, knownDate);
-    receipt.setFields(info.date, info.description, info.amount);
-    receipt.setBadge('done', 'OCR done');
-  } catch {
-    receipt.setBadge('failed', 'OCR failed — edit manually');
-  }
-
-  receipt.ready = true;
-  receipt.enableDl();
-  refreshStatus();
-}
-
-function download(bytes, filename) {
+function triggerDownload(bytes, filename) {
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })),
     download: filename,
@@ -321,49 +240,139 @@ function download(bytes, filename) {
   URL.revokeObjectURL(a.href);
 }
 
-// ── Drop / file input ──────────────────────────────────────────────────────
+// ── State ──────────────────────────────────────────────────────────────────
 
-dropzone.addEventListener('click', () => fileInput.click());
-dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('over'); });
-dropzone.addEventListener('dragleave',  () => dropzone.classList.remove('over'));
-dropzone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropzone.classList.remove('over');
-  handle([...e.dataTransfer.files]);
-});
-fileInput.addEventListener('change', () => handle([...fileInput.files]));
+const receipts = [];
 
-function handle(files) {
-  files.filter(f => /\.(jpg|jpeg)$/i.test(f.name)).forEach(processFile);
+// ── Card UI ────────────────────────────────────────────────────────────────
+
+function createCard(receipt) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <img class="card-thumb" src="${receipt.url}" alt="">
+    <div class="card-body">
+      <div class="card-name">${receipt.file.name}</div>
+      <span class="status-badge waiting">Waiting for model…</span>
+      <div class="field"><label>Date</label><input class="f-date" value="${receipt.date}"></div>
+      <div class="field"><label>Description</label><input class="f-desc" value=""></div>
+      <div class="field amount-field"><label>Amount</label><input class="f-amount" value=""></div>
+      <div class="fn-preview"></div>
+      <button class="btn-dl" disabled>Download PDF</button>
+    </div>`;
+
+  document.getElementById('cards').appendChild(card);
+
+  const fDate   = card.querySelector('.f-date');
+  const fDesc   = card.querySelector('.f-desc');
+  const fAmount = card.querySelector('.f-amount');
+  const preview = card.querySelector('.fn-preview');
+  const badge   = card.querySelector('.status-badge');
+  const btnDl   = card.querySelector('.btn-dl');
+
+  const refreshFn = () => {
+    preview.textContent = buildFilename(fDate.value, fDesc.value, fAmount.value);
+  };
+  refreshFn();
+  [fDate, fDesc, fAmount].forEach(el => el.addEventListener('input', refreshFn));
+
+  btnDl.addEventListener('click', async () => {
+    btnDl.disabled = true; btnDl.textContent = 'Building…';
+    try {
+      triggerDownload(await makePdf(receipt.file), buildFilename(fDate.value, fDesc.value, fAmount.value));
+    } finally {
+      btnDl.disabled = false; btnDl.textContent = 'Download PDF';
+    }
+  });
+
+  receipt.card = card;
+  receipt.setBadge = (cls, text) => { badge.className = `status-badge ${cls}`; badge.textContent = text; };
+  receipt.setAmount = v => { fAmount.value = v; refreshFn(); };
+  receipt.setDesc   = v => { if (v) { fDesc.value = v; refreshFn(); } };
+  receipt.enableDl  = () => { btnDl.disabled = false; };
+  receipt.getFields = () => ({ date: fDate.value, desc: fDesc.value, amount: fAmount.value });
 }
 
-// ── Download all as ZIP ────────────────────────────────────────────────────
+// ── Analysis ───────────────────────────────────────────────────────────────
 
-btnZip.addEventListener('click', async () => {
-  btnZip.disabled = true;
-  btnZip.textContent = 'Building ZIP…';
+async function runAnalysis(receipt) {
+  receipt.setBadge('scanning', 'Scanning receipt…');
+  try {
+    const result = await extractor(receipt.url);
+    const { amount, description } = parseDonut(result[0]?.generated_text ?? '');
+    receipt.setAmount(amount);
+    receipt.setDesc(description);
+    receipt.setBadge(amount ? 'done' : 'failed', amount ? 'Amount found' : 'Not found — fill manually');
+  } catch {
+    receipt.setBadge('failed', 'Analysis failed — fill manually');
+  }
+  receipt.ready = true;
+  receipt.enableDl();
+  refreshStatus();
+}
+
+// ── File handling ──────────────────────────────────────────────────────────
+
+function processFile(file) {
+  const url = URL.createObjectURL(file);
+  const receipt = { file, url, date: dateFromFilename(file.name) || '', ready: false };
+  receipts.push(receipt);
+
+  document.getElementById('actions').style.display = 'flex';
+  createCard(receipt);
+  refreshStatus();
+
+  if (extractor) {
+    runAnalysis(receipt);
+  } else {
+    pendingReceipts.push(receipt);
+  }
+}
+
+function refreshStatus() {
+  const ready = receipts.filter(r => r.ready).length;
+  document.getElementById('btn-zip').disabled = ready === 0;
+  document.getElementById('global-status').textContent =
+    receipts.length ? `${ready} / ${receipts.length} ready` : '';
+}
+
+// ── Events ─────────────────────────────────────────────────────────────────
+
+const dropzone  = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover',  e => { e.preventDefault(); dropzone.classList.add('over'); });
+dropzone.addEventListener('dragleave', ()  => dropzone.classList.remove('over'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('over');
+  [...e.dataTransfer.files].filter(f => /\.(jpg|jpeg)$/i.test(f.name)).forEach(processFile);
+});
+fileInput.addEventListener('change', () =>
+  [...fileInput.files].filter(f => /\.(jpg|jpeg)$/i.test(f.name)).forEach(processFile)
+);
+
+document.getElementById('btn-zip').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-zip');
+  btn.disabled = true; btn.textContent = 'Building ZIP…';
   const zip = new JSZip();
   for (const r of receipts) {
     const { date, desc, amount } = r.getFields();
     zip.file(buildFilename(date, desc, amount), await makePdf(r.file));
   }
   const blob = await zip.generateAsync({ type: 'blob' });
-  const a = Object.assign(document.createElement('a'), {
-    href: URL.createObjectURL(blob), download: 'receipts.zip'
-  });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'receipts.zip' });
   a.click();
   URL.revokeObjectURL(a.href);
-  btnZip.disabled = false;
-  btnZip.textContent = '⬇ Download all as ZIP';
+  btn.disabled = false; btn.textContent = '⬇ Download all as ZIP';
 });
 
-// ── Clear ──────────────────────────────────────────────────────────────────
-
-btnClear.addEventListener('click', () => {
+document.getElementById('btn-clear').addEventListener('click', () => {
   receipts.forEach(r => URL.revokeObjectURL(r.url));
   receipts.length = 0;
-  cardsEl.innerHTML = '';
-  actionsEl.style.display = 'none';
+  pendingReceipts.length = 0;
+  document.getElementById('cards').innerHTML = '';
+  document.getElementById('actions').style.display = 'none';
   fileInput.value = '';
   refreshStatus();
 });
